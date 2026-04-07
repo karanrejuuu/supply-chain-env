@@ -1,52 +1,68 @@
 """
-Grader for the Supply Chain Disruption Agent environment.
+Deterministic grader for the Supply Chain Disruption Environment.
 
-grade() compares actions taken by an agent against the reference optimal
-sequence and returns a deterministic score in [0.0, 1.0].
+Returns a score in [0.0, 1.0] based on:
+  - fulfilment rate  (50%)
+  - cost efficiency  (30%)
+  - speed            (20%)
+
+No randomness. Fully reproducible.
 """
 
+from __future__ import annotations
 
-def grade(actions_taken: list[str], optimal_actions: list[str]) -> float:
+
+def grade(metrics: dict) -> float:
     """
-    Score an agent's action sequence against the optimal sequence.
-
-    Scoring rules
-    -------------
-    * Base score is built by stepping through optimal actions in order.
-    * Each optimal action found (in order) in actions_taken adds
-      ``1 / len(optimal_actions)`` to the base score.
-    * Extra actions beyond the optimal length penalise the score by
-      ``0.05`` per extra step, capped so the score never goes below 0.
-    * Final score is clamped to [0.0, 1.0].
+    Score an episode based on final metrics.
 
     Parameters
     ----------
-    actions_taken   : Actions produced by the agent (in order).
-    optimal_actions : Ground-truth optimal action sequence.
+    metrics : dict
+        Must contain:
+        - orders_fulfilled : int
+        - total_orders     : int
+        - total_cost       : float
+        - time_step        : int   (steps used)
+        - max_steps        : int   (budget for the task)
 
     Returns
     -------
     float in [0.0, 1.0]
     """
-    if not optimal_actions:
-        return 1.0 if not actions_taken else 0.0
+    total_orders = metrics.get("total_orders", 1)
+    orders_fulfilled = metrics.get("orders_fulfilled", 0)
+    total_cost = metrics.get("total_cost", 0.0)
+    time_used = metrics.get("time_step", 0)
+    max_steps = metrics.get("max_steps", 20)
 
-    n_optimal = len(optimal_actions)
-    matched = 0
-    search_start = 0  # advance pointer so order is respected
+    # --- Fulfilment rate (0.0 – 1.0) ---
+    fulfillment_rate = (
+        orders_fulfilled / total_orders if total_orders > 0 else 1.0
+    )
 
-    for optimal_act in optimal_actions:
-        for idx in range(search_start, len(actions_taken)):
-            if actions_taken[idx] == optimal_act:
-                matched += 1
-                search_start = idx + 1
-                break
+    # --- Cost efficiency (0.0 – 1.0) ---
+    # Lower cost is better. We use a reference max cost to normalise.
+    # Reference: worst case ≈ max_steps * 50 (expensive actions every step)
+    max_plausible_cost = max_steps * 50.0
+    if max_plausible_cost > 0:
+        cost_ratio = min(total_cost / max_plausible_cost, 1.0)
+        cost_efficiency = 1.0 - cost_ratio
+    else:
+        cost_efficiency = 1.0
 
-    base_score: float = matched / n_optimal
+    # --- Speed (0.0 – 1.0) ---
+    # Finishing in fewer steps is better.
+    if max_steps > 0:
+        speed = 1.0 - (time_used / max_steps)
+    else:
+        speed = 1.0
 
-    # Penalise extra steps
-    extra_steps = max(0, len(actions_taken) - n_optimal)
-    penalty = extra_steps * 0.05
-    score = base_score - penalty
+    # --- Weighted composite ---
+    score = (
+        0.5 * fulfillment_rate
+        + 0.3 * cost_efficiency
+        + 0.2 * max(speed, 0.0)
+    )
 
     return round(max(0.0, min(1.0, score)), 4)

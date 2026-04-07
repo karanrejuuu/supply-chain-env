@@ -1,74 +1,125 @@
 # Supply Chain Disruption Agent
 
 > An **OpenEnv**-compatible reinforcement learning environment that simulates
-> real-world supply chain disruptions and challenges agents to recover efficiently.
+> real-world supply chain disruptions and challenges AI agents to optimise
+> recovery across a multi-warehouse, multi-supplier network.
 
 ---
 
-## 📦 Project Overview
+## 📦 Problem Statement
 
-Modern supply chains are fragile. A delayed shipment, a supplier going offline, or a
-blocked transport route can cascade into stock-outs and financial losses within hours.
-This environment models those dynamics and asks an AI agent to take corrective actions
-under uncertainty, with the goal of satisfying customer demand as quickly and cheaply
-as possible.
+Global supply chains are fragile. A single supplier delay in Shenzhen can halt
+production in Detroit. A blocked shipping lane can cascade into empty shelves
+within days. The 2021 Suez Canal blockage, COVID-era semiconductor shortages,
+and the 2023 Red Sea disruptions collectively cost the global economy over
+**$80 billion**.
 
----
+This environment models those dynamics:
 
-## 🌍 Real-World Motivation
+| Disruption Type      | Real-World Example                             |
+|----------------------|------------------------------------------------|
+| Supplier delay       | COVID-19 factory shutdowns (2020–2021)         |
+| Transport blockage   | Suez Canal blockage (Ever Given, 2021)         |
+| Inventory imbalance  | Semiconductor shortage hitting auto industry   |
+| Cascading failure    | Red Sea rerouting + port congestion (2023)     |
 
-| Disruption Type     | Real Example                                  |
-|---------------------|-----------------------------------------------|
-| Supplier delay      | COVID-19 factory shutdowns in 2020–2021       |
-| Transport blockage  | Suez Canal blockage (Ever Given, 2021)        |
-| Inventory stock-out | Semiconductor shortage hitting auto industry  |
-
-By training agents on this environment, organisations can develop automated
-decision-support systems that respond to disruptions faster than human planners.
-
----
-
-## 🔭 Observation Space
-
-| Field              | Type    | Values              | Description                        |
-|--------------------|---------|---------------------|------------------------------------|
-| `inventory`        | `int`   | ≥ 0                 | Units currently in stock           |
-| `demand`           | `int`   | ≥ 0                 | Units required to satisfy orders   |
-| `supplier_status`  | `str`   | `"ok"` / `"delayed"`| Primary supplier availability      |
-| `transport_status` | `str`   | `"ok"` / `"blocked"`| Logistics route status             |
-| `time_elapsed`     | `int`   | ≥ 0                 | Steps taken in the current episode |
-| `cost`             | `float` | ≥ 0.0               | Cumulative cost of actions taken   |
+An AI agent must **diagnose**, **prioritise**, and **resolve** these disruptions
+through corrective actions to satisfy customer demand as efficiently as possible.
 
 ---
 
-## 🎮 Action Space
+## 🏗️ Architecture Overview
 
-| Action                | Effect                                       | Cost   |
-|-----------------------|----------------------------------------------|--------|
-| `order_more_stock`    | inventory += 30                              | +50    |
-| `switch_supplier`     | supplier_status → "ok"                       | +30    |
-| `reroute_transport`   | transport_status → "ok"                      | +20    |
-| `delay_order`         | No improvement; incurs reward penalty        | 0      |
-| `do_nothing`          | No improvement; incurs reward penalty        | 0      |
+```
+┌─────────────────────────────────────────────────────┐
+│                   SupplyChainEnv                    │
+│        (OpenEnv-compatible reset/step API)          │
+│                                                     │
+│   ┌───────────────────────────────────────────┐     │
+│   │          SupplyChainSimulator              │     │
+│   │  ┌───────────┐  ┌──────────┐  ┌────────┐ │     │
+│   │  │ Warehouses │  │ Suppliers│  │ Routes │ │     │
+│   │  └───────────┘  └──────────┘  └────────┘ │     │
+│   │  ┌───────────┐  ┌──────────────────────┐ │     │
+│   │  │  Orders   │  │    Disruptions       │ │     │
+│   │  └───────────┘  └──────────────────────┘ │     │
+│   └───────────────────────────────────────────┘     │
+│                                                     │
+│   Reward Shaping ─── Grader ─── Task Definitions    │
+└─────────────────────────────────────────────────────┘
+```
+
+| Module            | Purpose                                         |
+|-------------------|-------------------------------------------------|
+| `environment.py`  | OpenEnv interface (reset/step), reward shaping   |
+| `simulator.py`    | Core simulation engine (state, actions, time)    |
+| `models.py`       | Pydantic schemas for Action & Observation        |
+| `tasks.py`        | 3 task definitions (easy/medium/hard)            |
+| `grader.py`       | Deterministic scoring (0.0 – 1.0)               |
 
 ---
 
 ## 📋 Task Descriptions
 
-### Easy
-- **Initial state**: inventory=10, demand=50, supplier=ok, transport=ok
-- **Optimal solution**: `["order_more_stock"]`
-- **Challenge**: Straightforward reorder; infrastructure is intact.
+### Easy — Single Supplier Delay
+- **Scenario**: Primary supplier is delayed; warehouse-A runs short
+- **Goal**: Expedite the supplier and fulfil all orders before deadlines
+- **Max Steps**: 10
+- **Disruptions**: 1 (supplier delay)
 
-### Medium
-- **Initial state**: inventory=10, demand=50, supplier=**delayed**, transport=ok
-- **Optimal solution**: `["switch_supplier", "order_more_stock"]`
-- **Challenge**: Must fix the supplier before restocking is effective.
+### Medium — Multi-Warehouse Imbalance
+- **Scenario**: warehouse-A is overstocked, warehouse-C is nearly empty; orders target warehouse-C
+- **Goal**: Reallocate inventory and manage transport to fulfil all orders
+- **Max Steps**: 15
+- **Disruptions**: 0 (logistics challenge)
 
-### Hard
-- **Initial state**: inventory=5, demand=80, supplier=**delayed**, transport=**blocked**
-- **Optimal solution**: `["switch_supplier", "reroute_transport", "order_more_stock"]`
-- **Challenge**: Cascading failures requiring coordinated multi-step recovery.
+### Hard — Cascading Disruptions
+- **Scenario**: Supplier failure + route blockage + low inventory across all warehouses
+- **Goal**: Dynamically adapt — expedite supplier, unblock routes, reallocate stock
+- **Max Steps**: 20
+- **Disruptions**: 2 (supplier delay + route block)
+
+---
+
+## 🎮 Action Schema
+
+| Field          | Type           | Description                          |
+|----------------|----------------|--------------------------------------|
+| `action_type`  | `str` (required) | `reroute` · `expedite` · `reallocate` · `wait` |
+| `route_id`     | `str?`         | Target route (for reroute)           |
+| `supplier_id`  | `str?`         | Target supplier (for expedite)       |
+| `warehouse_id` | `str?`         | Target warehouse (for reallocate)    |
+| `quantity`     | `int?`         | Units to transfer (for reallocate)   |
+
+---
+
+## 🔭 Observation Schema
+
+| Field               | Type        | Description                                    |
+|---------------------|-------------|------------------------------------------------|
+| `inventory_levels`  | `dict`      | Inventory count per warehouse                  |
+| `pending_orders`    | `list`      | Pending orders with destination, qty, deadline  |
+| `disruption_status` | `list`      | Active disruptions with type, target, severity  |
+| `cost_so_far`       | `float`     | Cumulative cost of all actions                 |
+| `time_step`         | `int`       | Current simulation step                        |
+| `supplier_info`     | `dict`      | Supplier capacity, reliability, active status   |
+| `route_info`        | `dict`      | Route cost, delay prob, flow rate, active status|
+
+---
+
+## ⚡ Reward Function
+
+| Signal                          | Reward     |
+|---------------------------------|------------|
+| Order fulfilled                 | **+1.0**   |
+| Disruption resolved             | **+0.5**   |
+| Inventory reallocated           | **+0.3**   |
+| Terminal: all orders done       | **+2.0**   |
+| Missed deadline                 | **−1.5**   |
+| Unnecessary/invalid action      | **−0.2**   |
+| Repeated wait (×2)              | **−0.3**   |
+| Repeated wait (×3+)            | **−0.5**   |
+| Time pressure (per step)        | **−0.05**  |
 
 ---
 
@@ -78,70 +129,62 @@ decision-support systems that respond to disruptions faster than human planners.
 - Python 3.10+
 - pip
 
-### Install locally
+### Install Locally
 
 ```bash
-# Clone / download the project
 cd supply-chain-env
-
-# Install dependencies
 pip install -r requirements.txt
 ```
 
-### Run the baseline agent
+### Run the Baseline Agent
 
 ```bash
+# Heuristic policy (no API key needed)
 python scripts/run_inference.py
+
+# LLM policy (requires HF_TOKEN)
+export HF_TOKEN=your_token_here
+python scripts/run_inference.py --mode llm
 ```
 
 ---
 
 ## 🐳 Docker
 
-### Build the image
-
 ```bash
-docker build -t supply-chain .
-```
+# Build
+docker build -t supply-chain-env .
 
-### Run the container
-
-```bash
-docker run supply-chain
+# Run
+docker run supply-chain-env
 ```
 
 ---
 
-## 🖥️ Example Output
+## 📊 Baseline Results
+
+| Task     | Score  | Fulfilled | Cost   | Steps |
+|----------|--------|-----------|--------|-------|
+| Easy     | 0.9620 | 2/2       | 30.00  | 1     |
+| Medium   | 0.9787 | 3/3       | 20.00  | 1     |
+| Hard     | 0.9520 | 4/4       | 60.00  | 3     |
+| **Avg**  | **0.9642** | —     | —      | —     |
+
+*Results from the built-in heuristic policy. The heuristic acts as an expert upper-bound baseline.*
+
+---
+
+## 🏆 Grading Formula
 
 ```
-============================================================
-  Supply Chain Disruption Agent — Task: HARD
-============================================================
-
-Initial State:
-  {'inventory': 5, 'demand': 80, 'supplier_status': 'delayed',
-   'transport_status': 'blocked', 'time_elapsed': 0, 'cost': 0.0}
-
-  Step 01 | Action: switch_supplier        | Reward: +0.50 | Done: False
-  Step 02 | Action: reroute_transport      | Reward: +0.50 | Done: False
-  Step 03 | Action: order_more_stock       | Reward: +1.70 | Done: True
-
-============================================================
-  Episode Complete
-============================================================
-
-Final State:
-  {'inventory': 35, 'demand': 80, 'supplier_status': 'ok',
-   'transport_status': 'ok', 'time_elapsed': 3, 'cost': 100.0}
-
-Total Steps  : 3
-Total Reward : 2.7000
-Actions Taken: ['switch_supplier', 'reroute_transport', 'order_more_stock']
-
-Grader Score : 1.0000  (optimal: ['switch_supplier', 'reroute_transport', 'order_more_stock'])
-============================================================
+score = 0.5 × fulfilment_rate + 0.3 × cost_efficiency + 0.2 × speed
 ```
+
+- **Fulfilment rate**: orders fulfilled / total orders
+- **Cost efficiency**: 1 − (total_cost / max_plausible_cost)
+- **Speed**: 1 − (steps_used / max_steps)
+
+Score is deterministic and always in **[0.0, 1.0]**.
 
 ---
 
@@ -152,29 +195,17 @@ supply-chain-env/
 ├── env/
 │   ├── __init__.py         # Package exports
 │   ├── environment.py      # SupplyChainEnv (OpenEnv interface)
-│   ├── models.py           # Pydantic Observation & Action models
+│   ├── simulator.py        # SupplyChainSimulator (core engine)
+│   ├── models.py           # Pydantic Action & Observation models
 │   ├── tasks.py            # Easy / Medium / Hard task definitions
 │   └── grader.py           # Deterministic grader (0.0–1.0)
 ├── scripts/
-│   └── run_inference.py    # Rule-based baseline agent
+│   └── run_inference.py    # Baseline inference (heuristic + LLM)
 ├── openenv.yaml            # OpenEnv manifest
-├── Dockerfile              # Container build instructions
+├── Dockerfile              # Container build
 ├── requirements.txt        # Python dependencies
 └── README.md               # This file
 ```
-
----
-
-## 🏆 Reward Function Summary
-
-| Condition                                      | Reward  |
-|------------------------------------------------|---------|
-| Action matches next optimal step               | +0.3    |
-| Action improves system state                   | +0.2    |
-| Demand satisfied (terminal)                    | +1.0    |
-| Action does not match optimal step             | −0.3    |
-| `delay_order`                                  | −0.2    |
-| `do_nothing`                                   | −0.3    |
 
 ---
 

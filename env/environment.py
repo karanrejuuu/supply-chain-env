@@ -1,16 +1,28 @@
+"""
+SupplyChainEnv — OpenEnv-compatible environment.
+
+Wraps the SupplyChainSimulator with a standard reset/step interface,
+strong reward shaping, done conditions, and rich info dicts.
+"""
+
+from __future__ import annotations
+
 import copy
-from env.models import Observation, Action
-from env.tasks import TASKS
+from typing import Any
+
+from env.models import Action, Observation
+from env.simulator import SupplyChainSimulator
+from env.tasks import TASKS, TaskDefinition
 
 
 class SupplyChainEnv:
     """
     OpenEnv-compatible environment simulating supply chain disruptions.
-    The agent must recover from disruptions (supplier delays, transport blockages,
-    low inventory) within a configurable number of steps.
-    """
 
-    MAX_STEPS: int = 20
+    The agent must recover from disruptions (supplier delays, route blocks,
+    inventory imbalances) through corrective actions to satisfy customer
+    demand as efficiently as possible.
+    """
 
     def __init__(self, task_name: str = "hard") -> None:
         if task_name not in TASKS:
@@ -18,118 +30,147 @@ class SupplyChainEnv:
                 f"Unknown task '{task_name}'. Choose from: {list(TASKS.keys())}"
             )
         self._task_name = task_name
-        self._task = TASKS[task_name]
-        self._optimal: list[str] = self._task["optimal_solution"]
-        self._optimal_index: int = 0
-        self._state: Observation = copy.deepcopy(self._task["initial_state"])
-        self._done: bool = False
+        self._task: TaskDefinition = TASKS[task_name]
+        self._sim = SupplyChainSimulator()
+        self._done = False
+        self._step_count = 0
+        self._cumulative_reward = 0.0
+        self._action_history: list[str] = []
 
     # ------------------------------------------------------------------
     # Public interface
     # ------------------------------------------------------------------
 
     def reset(self) -> Observation:
-        """Reset to the initial state of the current task."""
-        self._state = copy.deepcopy(self._task["initial_state"])
+        """Reset environment to the initial state of the current task."""
         self._done = False
-        self._optimal_index = 0
-        return copy.deepcopy(self._state)
+        self._step_count = 0
+        self._cumulative_reward = 0.0
+        self._action_history = []
+
+        obs = self._sim.reset(
+            seed=self._task.seed,
+            warehouses=self._task.warehouses,
+            suppliers=self._task.suppliers,
+            routes=self._task.routes,
+            orders=self._task.orders,
+            disruptions=self._task.disruptions,
+        )
+        return obs
 
     def step(self, action: Action) -> tuple[Observation, float, bool, dict]:
         """
-        Apply action, compute reward, advance state.
+        Apply one agent action, advance time, compute shaped reward.
 
-        Returns
-        -------
-        observation : Observation
-        reward      : float
-        done        : bool
-        info        : dict
+        Returns (observation, reward, done, info).
         """
         if self._done:
-            raise RuntimeError("Episode is done. Call reset() to start a new episode.")
+            raise RuntimeError(
+                "Episode is done. Call reset() to start a new episode."
+            )
 
-        reward = self._compute_reward(action)
-        self._apply_action(action)
+        self._step_count += 1
+        self._action_history.append(action.action_type)
 
-        self._state.time_elapsed += 1
+        # Snapshot cost before action for delta tracking
+        cost_before = self._sim.total_cost
 
-        # Terminal condition
-        if self._state.inventory >= self._state.demand:
+        # --- Apply action & get action reward ---
+        action_reward = self._sim.apply_action(action)
+
+        # --- Advance simulation clock & get time-step reward ---
+        time_reward = self._sim.step_time()
+
+        # Cost incurred this step
+        step_cost = self._sim.total_cost - cost_before
+
+        # --- Shaped reward ---
+        reward = self._shape_reward(action, action_reward, time_reward, step_cost)
+        self._cumulative_reward += reward
+
+        # --- Done conditions ---
+        if self._sim.all_orders_done:
             self._done = True
-            reward += 1.0  # terminal reward
-
-        if self._state.time_elapsed >= self.MAX_STEPS:
+            reward += 2.0  # terminal bonus for full fulfilment
+        elif self._step_count >= self._task.max_steps:
             self._done = True
+            # Penalise any unfulfilled orders at timeout
+            unfulfilled = len(self._sim.orders)
+            reward -= unfulfilled * 0.5
 
+        # --- Build info dict ---
+        metrics = self._sim.get_metrics()
+        metrics["max_steps"] = self._task.max_steps
         info = {
             "task": self._task_name,
-            "time_elapsed": self._state.time_elapsed,
-            "optimal_index": self._optimal_index,
+            "step": self._step_count,
+            "cumulative_reward": self._cumulative_reward + reward,
+            "action_history": list(self._action_history),
+            **metrics,
         }
 
-        return copy.deepcopy(self._state), reward, self._done, info
+        obs = self._sim.get_observation()
+        return obs, reward, self._done, info
 
-    def state(self) -> Observation:
-        """Return the current observation (read-only copy)."""
-        return copy.deepcopy(self._state)
+    def get_task(self) -> TaskDefinition:
+        """Return the current task definition."""
+        return self._task
 
     # ------------------------------------------------------------------
-    # Internal helpers
+    # Reward shaping
     # ------------------------------------------------------------------
 
-    def _apply_action(self, action: Action) -> None:
-        act = action.action_type
+    def _shape_reward(
+        self, action: Action, action_reward: float, time_reward: float,
+        step_cost: float,
+    ) -> float:
+        """
+        Compose final step reward from multiple signals.
 
-        if act == "order_more_stock":
-            self._state.inventory += 30
-            self._state.cost += 50.0
+        Positive:
+          - Fulfilling orders (from time_reward)
+          - Resolving disruptions (from action_reward)
+          - Efficient routing (low cost actions get bonus)
 
-        elif act == "switch_supplier":
-            self._state.supplier_status = "ok"
-            self._state.cost += 30.0
-
-        elif act == "reroute_transport":
-            self._state.transport_status = "ok"
-            self._state.cost += 20.0
-
-        elif act == "delay_order":
-            pass  # no state improvement
-
-        elif act == "do_nothing":
-            pass  # no state improvement
-
-    def _compute_reward(self, action: Action) -> float:
-        act = action.action_type
-
-        # Penalty actions — evaluated first regardless of optimal index
-        if act == "delay_order":
-            return -0.2
-        if act == "do_nothing":
-            return -0.3
-
+        Negative:
+          - Unmet demand / missed deadlines (from time_reward)
+          - High cost actions
+          - Unnecessary / invalid actions (from action_reward)
+          - Repeated useless actions (wait streaks)
+        """
         reward = 0.0
 
-        # Check if this matches the next expected optimal action
-        if self._optimal_index < len(self._optimal):
-            if act == self._optimal[self._optimal_index]:
-                reward += 0.3
-                self._optimal_index += 1
-            else:
-                reward -= 0.3
+        # Base signals
+        reward += action_reward
+        reward += time_reward
 
-        # Check if the action improves system state
-        if self._is_improving(act):
-            reward += 0.2
+        # Cost efficiency shaping: penalise expensive single-step costs
+        if step_cost > 40:
+            reward -= 0.3  # heavy cost penalty
+        elif step_cost > 20:
+            reward -= 0.1  # moderate cost penalty
+        elif 0 < step_cost <= 10:
+            reward += 0.1  # bonus for cost-efficient actions
 
-        return reward
+        # Penalise repeated identical non-productive actions
+        if len(self._action_history) >= 3:
+            last3 = self._action_history[-3:]
+            if last3[0] == last3[1] == last3[2] and last3[0] in ("wait",):
+                reward -= 0.4  # extra penalty for triple repeat
 
-    def _is_improving(self, act: str) -> bool:
-        """Return True if the action meaningfully improves current state."""
-        if act == "order_more_stock":
-            return self._state.inventory < self._state.demand
-        if act == "switch_supplier":
-            return self._state.supplier_status == "delayed"
-        if act == "reroute_transport":
-            return self._state.transport_status == "blocked"
-        return False
+        # Small time pressure: each step has a tiny cost
+        reward -= 0.05
+
+        return round(reward, 4)
+
+    # ------------------------------------------------------------------
+    # Convenience
+    # ------------------------------------------------------------------
+
+    @property
+    def done(self) -> bool:
+        return self._done
+
+    @property
+    def action_history(self) -> list[str]:
+        return list(self._action_history)

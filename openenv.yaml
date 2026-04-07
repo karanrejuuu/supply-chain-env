@@ -1,33 +1,79 @@
 name: supply-chain-disruption-agent
 description: >
-  An OpenEnv environment that simulates real-world supply chain disruptions.
-  An agent must diagnose and resolve cascading failures — delayed suppliers,
-  blocked transport routes, and critically low inventory — through a sequence
-  of corrective actions to satisfy demand as efficiently as possible.
-version: "1.0.0"
+  An OpenEnv environment simulating real-world supply chain disruptions.
+  Global supply chains face cascading failures — supplier delays, transport
+  blockages, and inventory imbalances — that cost billions annually. This
+  environment challenges AI agents to diagnose disruptions and take corrective
+  actions (reroute, expedite, reallocate, or wait) across a multi-warehouse,
+  multi-supplier network to satisfy customer demand efficiently.
+
+version: "2.0.0"
 entrypoint: env.environment:SupplyChainEnv
+
 tasks:
-  - easy
-  - medium
-  - hard
+  - name: easy
+    description: "Single supplier delay — one disruption, fulfil all orders with minimal delay"
+    max_steps: 10
+  - name: medium
+    description: "Multi-warehouse imbalance — uneven inventory, transport decisions required"
+    max_steps: 15
+  - name: hard
+    description: "Cascading disruptions — supplier failure + route delays, dynamic adaptation"
+    max_steps: 20
+
+action_schema:
+  type: object
+  properties:
+    action_type:
+      type: string
+      enum: [reroute, expedite, reallocate, wait]
+      description: "Primary action to take"
+    route_id:
+      type: string
+      description: "Target route ID (for reroute actions)"
+      nullable: true
+    supplier_id:
+      type: string
+      description: "Target supplier ID (for expedite actions)"
+      nullable: true
+    warehouse_id:
+      type: string
+      description: "Target warehouse ID (for reallocate actions)"
+      nullable: true
+    quantity:
+      type: integer
+      description: "Units to move/order (for reallocate actions)"
+      nullable: true
+  required: [action_type]
+
+observation_schema:
+  type: object
+  properties:
+    inventory_levels:
+      type: object
+      description: "Inventory count per warehouse"
+    pending_orders:
+      type: array
+      description: "List of pending order objects with order_id, destination, quantity, deadline"
+    disruption_status:
+      type: array
+      description: "Active disruption events with type, target, severity, remaining_steps"
+    cost_so_far:
+      type: number
+      description: "Cumulative cost of all actions taken"
+    time_step:
+      type: integer
+      description: "Current simulation time step"
+    supplier_info:
+      type: object
+      description: "Supplier id -> {capacity, reliability, active}"
+    route_info:
+      type: object
+      description: "Route id -> {from, to, cost, delay_prob, active}"
+
 tags:
   - openenv
   - supply-chain
   - logistics
   - reinforcement-learning
   - sequential-decision-making
-action_space:
-  type: discrete
-  choices:
-    - order_more_stock
-    - switch_supplier
-    - reroute_transport
-    - delay_order
-    - do_nothing
-observation_space:
-  inventory: int
-  demand: int
-  supplier_status: "ok | delayed"
-  transport_status: "ok | blocked"
-  time_elapsed: int
-  cost: float
