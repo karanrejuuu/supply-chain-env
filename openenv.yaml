@@ -1,0 +1,33 @@
+name: supply-chain-disruption-agent
+description: >
+  An OpenEnv environment that simulates real-world supply chain disruptions.
+  An agent must diagnose and resolve cascading failures — delayed suppliers,
+  blocked transport routes, and critically low inventory — through a sequence
+  of corrective actions to satisfy demand as efficiently as possible.
+version: "1.0.0"
+entrypoint: env.environment:SupplyChainEnv
+tasks:
+  - easy
+  - medium
+  - hard
+tags:
+  - openenv
+  - supply-chain
+  - logistics
+  - reinforcement-learning
+  - sequential-decision-making
+action_space:
+  type: discrete
+  choices:
+    - order_more_stock
+    - switch_supplier
+    - reroute_transport
+    - delay_order
+    - do_nothing
+observation_space:
+  inventory: int
+  demand: int
+  supplier_status: "ok | delayed"
+  transport_status: "ok | blocked"
+  time_elapsed: int
+  cost: float
