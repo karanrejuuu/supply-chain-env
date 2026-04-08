@@ -11,7 +11,7 @@ import copy
 import random
 from typing import Any
 
-from env.models import Action, DisruptionEvent, OrderItem, Observation
+from .simulator_models import Action, DisruptionEvent, OrderItem, Observation
 
 
 class SupplyChainSimulator:
