@@ -1,3 +1,4 @@
+<<<<<<< HEAD
 fastapi>=0.115,<0.136
 httpx>=0.27,<1.0
 matplotlib>=3.8,<3.11
@@ -6,3 +7,18 @@ pydantic>=2.7,<3.0
 pytest>=8.2,<9.1
 uvicorn>=0.30,<1.0
 wheel>=0.45,<1.0
+=======
+<<<<<<< HEAD
+fastapi
+uvicorn[standard]
+pydantic
+requests
+openai
+=======
+pydantic>=2.0
+openai>=1.0
+pandas>=2.0.0
+matplotlib>=3.7.0
+numpy>=1.24.0
+>>>>>>> 82c1d1adf91159e1f2359572ae3f24406e8491d6
+>>>>>>> 8b398ee12512f09a1dda88fb6fe73806e856585f

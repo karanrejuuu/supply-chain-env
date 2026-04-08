@@ -1,3 +1,4 @@
+<<<<<<< HEAD
 .venv/
 venv/
 ENV/
@@ -19,5 +20,53 @@ build/
 .python-version
 .env
 .env.*
+=======
+# Python bytecode and cache
+__pycache__/
+**/__pycache__/
+*.py[cod]
+*.pyc
+*$py.class
+
+# Virtual environments
+venv/
+.venv/
+env/
+ENV/
+
+# Distribution / packaging
+build/
+dist/
+*.egg-info/
+.eggs/
+pip-wheel-metadata/
+
+# Test and coverage artifacts
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.coverage
+.coverage.*
+htmlcov/
+
+# Logs and runtime outputs
+*.log
+inference_out.txt
+
+# Environment and secrets
+.env
+.env.*
+*.pem
+*.key
+*.crt
+
+# IDE/editor
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# OS files
+>>>>>>> 8b398ee12512f09a1dda88fb6fe73806e856585f
 .DS_Store
 Thumbs.db

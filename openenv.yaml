@@ -1,3 +1,29 @@
+<<<<<<< HEAD
+name: supply-chain-env
+entrypoint: src.envs.supply_chain.server.app:app
+
+tasks:
+  easy:
+    description: "Low demand, short delays, ample budget — suitable for initial testing"
+    demand: 30
+    supplier_delay_days: 1
+    budget: 500
+    max_time: 15
+
+  medium:
+    description: "Moderate disruptions with tighter budget and less reliable suppliers"
+    demand: 50
+    supplier_delay_days: 3
+    budget: 350
+    max_time: 12
+
+  hard:
+    description: "High demand, severe delays, limited budget, transport unavailable"
+    demand: 80
+    supplier_delay_days: 5
+    budget: 200
+    max_time: 10
+=======
 name: supply-chain-disruption-agent
 description: >
   Deterministic supply chain disruption simulator with a heuristic baseline,
@@ -76,6 +102,12 @@ tags:
   - openenv
   - real-world
   - logistics
+<<<<<<< HEAD
   - simulation
   - hackathon
   - fastapi
+=======
+  - reinforcement-learning
+  - sequential-decision-making
+>>>>>>> 82c1d1adf91159e1f2359572ae3f24406e8491d6
+>>>>>>> 8b398ee12512f09a1dda88fb6fe73806e856585f
