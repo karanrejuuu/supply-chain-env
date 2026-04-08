@@ -1,0 +1,38 @@
+[build-system]
+requires = ["setuptools>=65.5.0", "wheel>=0.45"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "supply-chain-env"
+version = "0.1.0"
+description = "Hackathon-ready supply chain disruption simulator with CLI, FastAPI server, and optional LLM policy."
+readme = "README.md"
+requires-python = ">=3.10,<3.15"
+license = { text = "MIT" }
+authors = [
+  { name = "OpenAI Codex" }
+]
+dependencies = [
+  "fastapi>=0.115,<0.136",
+  "httpx>=0.27,<1.0",
+  "matplotlib>=3.8,<3.11",
+  "openai>=1.0,<3.0",
+  "pydantic>=2.7,<3.0",
+  "uvicorn>=0.30,<1.0",
+]
+
+[project.optional-dependencies]
+dev = [
+  "pytest>=8.2,<9.1",
+]
+
+[tool.setuptools]
+include-package-data = true
+
+[tool.setuptools.packages.find]
+where = ["src"]
+include = ["envs*"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+addopts = "-p no:cacheprovider"

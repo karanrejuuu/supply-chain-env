@@ -1,214 +1,127 @@
-# Supply Chain Disruption Agent
+# Supply Chain Disruption OpenEnv
 
-> An **OpenEnv**-compatible reinforcement learning environment that simulates
-> real-world supply chain disruptions and challenges AI agents to optimise
-> recovery across a multi-warehouse, multi-supplier network.
+Real-world OpenEnv environment for operational supply-chain disruption management.  
+Agents must recover service levels under supplier failures, route blocks, and inventory imbalances using typed actions over `reset()`, `step()`, and `state()`.
 
----
+## Environment Motivation
 
-## 📦 Problem Statement
+This simulates a task humans do in logistics operations: deciding when to reroute, expedite, reallocate stock, or wait during disruptions. It is not a toy game and is designed for deterministic, reproducible agent evaluation.
 
-Global supply chains are fragile. A single supplier delay in Shenzhen can halt
-production in Detroit. A blocked shipping lane can cascade into empty shelves
-within days. The 2021 Suez Canal blockage, COVID-era semiconductor shortages,
-and the 2023 Red Sea disruptions collectively cost the global economy over
-**$80 billion**.
+## OpenEnv API and Spaces
 
-This environment models those dynamics:
+### Action Space (`SupplyChainAction`)
 
-| Disruption Type      | Real-World Example                             |
-|----------------------|------------------------------------------------|
-| Supplier delay       | COVID-19 factory shutdowns (2020–2021)         |
-| Transport blockage   | Suez Canal blockage (Ever Given, 2021)         |
-| Inventory imbalance  | Semiconductor shortage hitting auto industry   |
-| Cascading failure    | Red Sea rerouting + port congestion (2023)     |
+- `action_type`: one of `reroute | expedite | reallocate | wait`
+- `route_id`: required for `reroute`
+- `supplier_id`: required for `expedite`
+- `warehouse_id`, `quantity`: required for `reallocate`
 
-An AI agent must **diagnose**, **prioritise**, and **resolve** these disruptions
-through corrective actions to satisfy customer demand as efficiently as possible.
+### Observation Space (`SupplyChainObservation`)
 
----
+- `inventory_levels`: warehouse inventory map
+- `pending_orders`: typed order list with deadlines and fulfillment flags
+- `disruption_status`: active disruptions
+- `supplier_info`, `route_info`: controllable topology state
+- `time_step`, `max_steps`, `cost_so_far`
+- `orders_fulfilled`, `orders_missed`, `total_orders`
+- `reward`, `done`
 
-## 🏗️ Architecture Overview
+### Reward Model (`SupplyChainReward`)
 
-```
-┌─────────────────────────────────────────────────────┐
-│                   SupplyChainEnv                    │
-│        (OpenEnv-compatible reset/step API)          │
-│                                                     │
-│   ┌───────────────────────────────────────────┐     │
-│   │          SupplyChainSimulator              │     │
-│   │  ┌───────────┐  ┌──────────┐  ┌────────┐ │     │
-│   │  │ Warehouses │  │ Suppliers│  │ Routes │ │     │
-│   │  └───────────┘  └──────────┘  └────────┘ │     │
-│   │  ┌───────────┐  ┌──────────────────────┐ │     │
-│   │  │  Orders   │  │    Disruptions       │ │     │
-│   │  └───────────┘  └──────────────────────┘ │     │
-│   └───────────────────────────────────────────┘     │
-│                                                     │
-│   Reward Shaping ─── Grader ─── Task Definitions    │
-└─────────────────────────────────────────────────────┘
-```
+- Typed reward representation in `models.py` for normalized evaluation dimensions:
+  `value`, `progress`, `efficiency`, `resilience`, `penalties` (all deterministic and bounded).
 
-| Module            | Purpose                                         |
-|-------------------|-------------------------------------------------|
-| `environment.py`  | OpenEnv interface (reset/step), reward shaping   |
-| `simulator.py`    | Core simulation engine (state, actions, time)    |
-| `models.py`       | Pydantic schemas for Action & Observation        |
-| `tasks.py`        | 3 task definitions (easy/medium/hard)            |
-| `grader.py`       | Deterministic scoring (0.0 – 1.0)               |
+## Tasks and Grading
 
----
+Three built-in tasks with clear difficulty progression:
 
-## 📋 Task Descriptions
+- `easy`: single supplier delay
+- `medium`: multi-warehouse rebalance
+- `hard`: cascading supplier + route disruptions
 
-### Easy — Single Supplier Delay
-- **Scenario**: Primary supplier is delayed; warehouse-A runs short
-- **Goal**: Expedite the supplier and fulfil all orders before deadlines
-- **Max Steps**: 10
-- **Disruptions**: 1 (supplier delay)
+Deterministic grader returns score in `[0.0, 1.0]` based on:
 
-### Medium — Multi-Warehouse Imbalance
-- **Scenario**: warehouse-A is overstocked, warehouse-C is nearly empty; orders target warehouse-C
-- **Goal**: Reallocate inventory and manage transport to fulfil all orders
-- **Max Steps**: 15
-- **Disruptions**: 0 (logistics challenge)
+- fulfillment rate (weighted highest)
+- cost efficiency
+- speed
 
-### Hard — Cascading Disruptions
-- **Scenario**: Supplier failure + route blockage + low inventory across all warehouses
-- **Goal**: Dynamically adapt — expedite supplier, unblock routes, reallocate stock
-- **Max Steps**: 20
-- **Disruptions**: 2 (supplier delay + route block)
+Reward shaping provides trajectory feedback (partial progress) and penalties for wasteful loops/costly behavior.
 
----
-
-## 🎮 Action Schema
-
-| Field          | Type           | Description                          |
-|----------------|----------------|--------------------------------------|
-| `action_type`  | `str` (required) | `reroute` · `expedite` · `reallocate` · `wait` |
-| `route_id`     | `str?`         | Target route (for reroute)           |
-| `supplier_id`  | `str?`         | Target supplier (for expedite)       |
-| `warehouse_id` | `str?`         | Target warehouse (for reallocate)    |
-| `quantity`     | `int?`         | Units to transfer (for reallocate)   |
-
----
-
-## 🔭 Observation Schema
-
-| Field               | Type        | Description                                    |
-|---------------------|-------------|------------------------------------------------|
-| `inventory_levels`  | `dict`      | Inventory count per warehouse                  |
-| `pending_orders`    | `list`      | Pending orders with destination, qty, deadline  |
-| `disruption_status` | `list`      | Active disruptions with type, target, severity  |
-| `cost_so_far`       | `float`     | Cumulative cost of all actions                 |
-| `time_step`         | `int`       | Current simulation step                        |
-| `supplier_info`     | `dict`      | Supplier capacity, reliability, active status   |
-| `route_info`        | `dict`      | Route cost, delay prob, flow rate, active status|
-
----
-
-## ⚡ Reward Function
-
-| Signal                          | Reward     |
-|---------------------------------|------------|
-| Order fulfilled                 | **+1.0**   |
-| Disruption resolved             | **+0.5**   |
-| Inventory reallocated           | **+0.3**   |
-| Terminal: all orders done       | **+2.0**   |
-| Missed deadline                 | **−1.5**   |
-| Unnecessary/invalid action      | **−0.2**   |
-| Repeated wait (×2)              | **−0.3**   |
-| Repeated wait (×3+)            | **−0.5**   |
-| Time pressure (per step)        | **−0.05**  |
-
----
-
-## ⚙️ Setup Instructions
-
-### Prerequisites
-- Python 3.10+
-- pip
-
-### Install Locally
+## Local Setup
 
 ```bash
-cd supply-chain-env
-pip install -r requirements.txt
+python -m venv .venv
+source .venv/bin/activate
+python -m pip install -r requirements.txt
 ```
 
-### Run the Baseline Agent
+Windows PowerShell activation:
 
-```bash
-# Heuristic policy (no API key needed)
-python scripts/run_inference.py
-
-# LLM policy (requires HF_TOKEN)
-export HF_TOKEN=your_token_here
-python scripts/run_inference.py --mode llm
+```powershell
+.\.venv\Scripts\activate
 ```
 
----
-
-## 🐳 Docker
+## Run the Environment
 
 ```bash
-# Build
+python -m uvicorn --app-dir src envs.supply_chain_env.server.app:app --host 0.0.0.0 --port 8000
+```
+
+Routes:
+
+- `GET /health`
+- `POST /reset`
+- `POST /step`
+- `GET /state`
+
+## Baseline Inference (`inference.py`)
+
+The required root inference script uses OpenAI client calls and prints strict structured logs:
+
+- `[START]`
+- `[STEP]`
+- `[END]`
+
+Set variables:
+
+- `API_BASE_URL`
+- `MODEL_NAME`
+- `HF_TOKEN` (or `OPENAI_API_KEY`)
+
+Run:
+
+```bash
+python inference.py
+```
+
+## Docker and HF Spaces
+
+Build and run:
+
+```bash
 docker build -t supply-chain-env .
-
-# Run
-docker run supply-chain-env
+docker run --rm -p 8000:8000 supply-chain-env
 ```
 
----
+The container starts Uvicorn and serves the OpenEnv API, ready for HF Spaces deployment.
 
-## 📊 Baseline Results
+## Validation
 
-| Task     | Score  | Fulfilled | Cost   | Steps |
-|----------|--------|-----------|--------|-------|
-| Easy     | 0.9620 | 2/2       | 30.00  | 1     |
-| Medium   | 0.9787 | 3/3       | 20.00  | 1     |
-| Hard     | 0.9520 | 4/4       | 60.00  | 3     |
-| **Avg**  | **0.9642** | —     | —      | —     |
+Pre-submission checks:
 
-*Results from the built-in heuristic policy. The heuristic acts as an expert upper-bound baseline.*
-
----
-
-## 🏆 Grading Formula
-
-```
-score = 0.5 × fulfilment_rate + 0.3 × cost_efficiency + 0.2 × speed
+```bash
+openenv validate
+python -m pytest
 ```
 
-- **Fulfilment rate**: orders fulfilled / total orders
-- **Cost efficiency**: 1 − (total_cost / max_plausible_cost)
-- **Speed**: 1 − (steps_used / max_steps)
+Run the bundled validator against your HF Space URL:
 
-Score is deterministic and always in **[0.0, 1.0]**.
-
----
-
-## 📁 Project Structure
-
-```
-supply-chain-env/
-├── env/
-│   ├── __init__.py         # Package exports
-│   ├── environment.py      # SupplyChainEnv (OpenEnv interface)
-│   ├── simulator.py        # SupplyChainSimulator (core engine)
-│   ├── models.py           # Pydantic Action & Observation models
-│   ├── tasks.py            # Easy / Medium / Hard task definitions
-│   └── grader.py           # Deterministic grader (0.0–1.0)
-├── scripts/
-│   └── run_inference.py    # Baseline inference (heuristic + LLM)
-├── openenv.yaml            # OpenEnv manifest
-├── Dockerfile              # Container build
-├── requirements.txt        # Python dependencies
-└── README.md               # This file
+```bash
+bash validate-submission.sh https://your-space.hf.space
 ```
 
----
+Mandatory runtime variables for judging:
 
-## 📜 License
-
-MIT — free to use, modify, and distribute.
+- `API_BASE_URL`
+- `MODEL_NAME`
+- `HF_TOKEN`

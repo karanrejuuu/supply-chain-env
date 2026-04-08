@@ -1,41 +1,73 @@
-from dataclasses import dataclass, field
-from typing import Optional, List, Dict, Any, Union
+from __future__ import annotations
 
-# Attempt to import core OpenEnv abstractions
-try:
-    from core.env_server import Action, Observation, State
-except ImportError:
-    # Local fallback for type checking if openenv not fully installed
-    class Action: pass
-    class Observation: pass
-    class State: pass
+from dataclasses import dataclass
+from typing import Optional
 
-@dataclass
-class SupplyChainAction(Action):
-    action_type: str
-    route_id: Optional[str] = None
-    supplier_id: Optional[str] = None
-    warehouse_id: Optional[str] = None
-    quantity: Optional[int] = None
+from pydantic import BaseModel, Field
 
-@dataclass
-class SupplyChainObservation(Observation):
-    inventory_levels: Dict[str, int]
-    pending_orders: List[Dict[str, Any]]
-    disruption_status: List[Dict[str, Any]]
-    cost_so_far: float
-    time_step: int
-    supplier_info: Dict[str, Any]
-    route_info: Dict[str, Any]
-    done: bool
-    reward: float
 
-@dataclass
-class SupplyChainState(State):
-    episode_id: Optional[str]
+class SupplyChainAction(BaseModel):
+    action_type: str = Field(..., pattern=r"^(reroute|expedite|reallocate|wait)$")
+    route_id: Optional[str] = Field(default=None)
+    supplier_id: Optional[str] = Field(default=None)
+    warehouse_id: Optional[str] = Field(default=None)
+    quantity: Optional[int] = Field(default=None, ge=0)
+
+
+class DisruptionEvent(BaseModel):
+    disruption_type: str = Field(...)
+    target_id: str = Field(...)
+    severity: float = Field(default=1.0, ge=0.0, le=1.0)
+    remaining_steps: int = Field(default=3, ge=0)
+
+
+class OrderItem(BaseModel):
+    order_id: str
+    destination_warehouse: str
+    quantity: int = Field(ge=1)
+    deadline: int = Field(ge=1)
+    fulfilled: bool = False
+    missed: bool = False
+
+
+class SupplyChainObservation(BaseModel):
+    inventory_levels: dict[str, int] = Field(...)
+    pending_orders: list[OrderItem] = Field(default_factory=list)
+    disruption_status: list[DisruptionEvent] = Field(default_factory=list)
+    cost_so_far: float = Field(default=0.0, ge=0.0)
+    time_step: int = Field(default=0, ge=0)
+    task_name: Optional[str] = Field(default=None)
+    max_steps: int = Field(default=0, ge=0)
+    orders_fulfilled: int = Field(default=0, ge=0)
+    orders_missed: int = Field(default=0, ge=0)
+    total_orders: int = Field(default=0, ge=0)
+    supplier_info: dict[str, dict] = Field(default_factory=dict)
+    route_info: dict[str, dict] = Field(default_factory=dict)
+    done: bool = Field(default=False)
+    reward: float = Field(default=0.0)
+
+
+class SupplyChainState(BaseModel):
+    episode_id: Optional[str] = None
     step_count: int
     task_name: str
     total_cost: float
     orders_fulfilled: int
+    orders_missed: int
     total_orders: int
     score: Optional[float] = None
+
+
+class SupplyChainReward(BaseModel):
+    value: float = Field(default=0.0, ge=0.0, le=1.0)
+    progress: float = Field(default=0.0, ge=0.0, le=1.0)
+    efficiency: float = Field(default=0.0, ge=0.0, le=1.0)
+    resilience: float = Field(default=0.0, ge=0.0, le=1.0)
+    penalties: float = Field(default=0.0, ge=0.0)
+
+
+@dataclass(frozen=True)
+class StepResult:
+    observation: SupplyChainObservation
+    reward: float
+    done: bool

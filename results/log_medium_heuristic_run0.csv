@@ -1,3 +1,0 @@
-step,action,cost_so_far,pending_orders,active_disruptions,inv_warehouse-A,inv_warehouse-B,inv_warehouse-C
-0,reallocate,0.0,3,0,120,30,5
-1,DONE,20.0,0,0,74,17,16

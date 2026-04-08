@@ -1,5 +1,5 @@
 """
-SupplyChainSimulator — core simulation engine.
+SupplyChainSimulator - core simulation engine.
 
 Manages warehouses, suppliers, routes, orders, and disruptions.
 Uses seeded RNG for deterministic replay.
@@ -11,17 +11,22 @@ import copy
 import random
 from typing import Any
 
-from .simulator_models import Action, DisruptionEvent, OrderItem, Observation
+from ..models import (
+    DisruptionEvent,
+    OrderItem,
+    SupplyChainAction as Action,
+    SupplyChainObservation as Observation,
+)
 
 
 class SupplyChainSimulator:
     """
     Deterministic supply chain simulation with:
     - Multi-warehouse inventory tracking
-    - Supplier capacity & reliability
-    - Route cost & delay modelling
-    - Order fulfilment lifecycle
-    - Disruption injection & resolution
+    - Supplier capacity and reliability
+    - Route cost and delay modeling
+    - Order fulfillment lifecycle
+    - Disruption injection and resolution
     """
 
     def __init__(self) -> None:
@@ -38,10 +43,6 @@ class SupplyChainSimulator:
         self._rng: random.Random = random.Random(0)
         self._prev_action: str | None = None
         self._repeated_wait_count: int = 0
-
-    # ------------------------------------------------------------------
-    # Setup
-    # ------------------------------------------------------------------
 
     def reset(
         self,
@@ -64,28 +65,16 @@ class SupplyChainSimulator:
         self.warehouses = copy.deepcopy(warehouses) if warehouses else {}
         self.suppliers = copy.deepcopy(suppliers) if suppliers else {}
         self.routes = copy.deepcopy(routes) if routes else {}
-        self.orders = (
-            [OrderItem(**o) for o in orders] if orders else []
-        )
-        self.disruptions = (
-            [DisruptionEvent(**d) for d in disruptions] if disruptions else []
-        )
+        self.orders = [OrderItem(**order) for order in orders] if orders else []
+        self.disruptions = [DisruptionEvent(**event) for event in disruptions] if disruptions else []
         self.total_orders = len(self.orders)
-
         return self._build_observation()
 
-    # ------------------------------------------------------------------
-    # Core step
-    # ------------------------------------------------------------------
-
     def apply_action(self, action: Action) -> float:
-        """
-        Apply an agent action. Returns incremental reward.
-        """
+        """Apply an agent action and return incremental reward."""
         reward = 0.0
         act = action.action_type
 
-        # Track repeated wait
         if act == "wait":
             if self._prev_action == "wait":
                 self._repeated_wait_count += 1
@@ -109,83 +98,76 @@ class SupplyChainSimulator:
     def step_time(self) -> float:
         """
         Advance simulation by one time step.
+
         - Tick down disruption timers
         - Process deliveries via active routes
         - Check order deadlines
-        Returns incremental reward from time-step events.
         """
         self.time_step += 1
         reward = 0.0
 
-        # --- Tick disruptions ---
         surviving: list[DisruptionEvent] = []
-        for d in self.disruptions:
-            if d.remaining_steps > 0:
-                d.remaining_steps -= 1
-                if d.remaining_steps > 0:
-                    surviving.append(d)
-                # else: auto-resolved
+        for disruption in self.disruptions:
+            if disruption.remaining_steps > 0:
+                disruption.remaining_steps -= 1
+                if disruption.remaining_steps > 0:
+                    surviving.append(disruption)
             else:
-                surviving.append(d)  # permanent until agent fixes it
+                surviving.append(disruption)
         self.disruptions = surviving
 
-        # --- Supplier replenishment ---
-        # Active, non-disrupted suppliers deliver inventory each step
-        wh_list = list(self.warehouses.keys())
-        for sid, sup in self.suppliers.items():
-            if not sup.get("active", True):
+        warehouse_ids = list(self.warehouses.keys())
+        for supplier_id, supplier in self.suppliers.items():
+            if not supplier.get("active", True):
                 continue
-            if self._supplier_disrupted(sid):
+            if self._supplier_disrupted(supplier_id):
                 continue
-            # Deliver a fraction of capacity (reliability-scaled)
-            capacity = sup.get("capacity", 0)
-            reliability = sup.get("reliability", 1.0)
-            delivery = int(capacity * reliability * 0.1)  # 10% per step
-            if delivery > 0 and wh_list:
-                target_wh = wh_list[0]  # default: first warehouse
-                self.warehouses[target_wh] += delivery
 
-        # --- Route deliveries ---
-        for rid, route in self.routes.items():
+            capacity = supplier.get("capacity", 0)
+            reliability = supplier.get("reliability", 1.0)
+            delivery = int(capacity * reliability * 0.1)
+            if delivery > 0 and warehouse_ids:
+                self.warehouses[warehouse_ids[0]] += delivery
+
+        for route_id, route in self.routes.items():
             if not route.get("active", True):
                 continue
-            # Check if route is disrupted
-            if self._route_disrupted(rid):
+            if self._route_disrupted(route_id):
                 continue
-            # Deliver goods: move from source to destination warehouse
-            src = route.get("from_warehouse")
-            dst = route.get("to_warehouse")
-            flow = route.get("flow_rate", 5)
-            if src and dst and src in self.warehouses and dst in self.warehouses:
-                transfer = min(self.warehouses[src], flow)
-                if transfer > 0:
-                    self.warehouses[src] -= transfer
-                    self.warehouses[dst] += transfer
 
-        # --- Check order fulfilment / deadlines ---
-        still_pending: list[OrderItem] = []
+            source = route.get("from_warehouse")
+            destination = route.get("to_warehouse")
+            flow_rate = route.get("flow_rate", 5)
+            if source and destination and source in self.warehouses and destination in self.warehouses:
+                transfer = min(self.warehouses[source], flow_rate)
+                if transfer > 0:
+                    self.warehouses[source] -= transfer
+                    self.warehouses[destination] += transfer
+
         for order in self.orders:
-            if order.fulfilled:
+            if order.fulfilled or order.missed:
                 continue
-            wh = order.destination_warehouse
-            if wh in self.warehouses and self.warehouses[wh] >= order.quantity:
-                # Fulfil order
-                self.warehouses[wh] -= order.quantity
+
+            destination = order.destination_warehouse
+            if destination in self.warehouses and self.warehouses[destination] >= order.quantity:
+                self.warehouses[destination] -= order.quantity
                 order.fulfilled = True
                 self.orders_fulfilled += 1
-                reward += 1.0  # positive reward for fulfilling
+                reward += 1.0
             elif self.time_step >= order.deadline:
-                # Missed deadline
+                order.missed = True
                 self.orders_missed += 1
-                reward -= 1.5  # penalty for missed order
-            else:
-                still_pending.append(order)
-        self.orders = still_pending
+                reward -= 1.5
 
         return reward
 
-    def inject_disruption(self, disruption_type: str, target_id: str,
-                          severity: float = 1.0, remaining_steps: int = 0) -> None:
+    def inject_disruption(
+        self,
+        disruption_type: str,
+        target_id: str,
+        severity: float = 1.0,
+        remaining_steps: int = 0,
+    ) -> None:
         """Inject a new disruption event into the simulation."""
         self.disruptions.append(
             DisruptionEvent(
@@ -195,13 +177,10 @@ class SupplyChainSimulator:
                 remaining_steps=remaining_steps,
             )
         )
-        # Apply immediate effects
-        if disruption_type == "supplier_delay":
-            if target_id in self.suppliers:
-                self.suppliers[target_id]["active"] = False
-        elif disruption_type == "route_block":
-            if target_id in self.routes:
-                self.routes[target_id]["active"] = False
+        if disruption_type == "supplier_delay" and target_id in self.suppliers:
+            self.suppliers[target_id]["active"] = False
+        elif disruption_type == "route_block" and target_id in self.routes:
+            self.routes[target_id]["active"] = False
 
     def compute_costs(self) -> dict[str, float]:
         """Return cost breakdown."""
@@ -210,149 +189,123 @@ class SupplyChainSimulator:
             "orders_fulfilled": self.orders_fulfilled,
             "orders_missed": self.orders_missed,
             "fulfillment_rate": (
-                self.orders_fulfilled / self.total_orders
-                if self.total_orders > 0
-                else 1.0
+                self.orders_fulfilled / self.total_orders if self.total_orders > 0 else 1.0
             ),
         }
-
-    # ------------------------------------------------------------------
-    # Observation builder
-    # ------------------------------------------------------------------
 
     def _build_observation(self) -> Observation:
         return Observation(
             inventory_levels=copy.deepcopy(self.warehouses),
-            pending_orders=[
-                o.model_dump() for o in self.orders if not o.fulfilled
-            ],
-            disruption_status=[d.model_dump() for d in self.disruptions],
+            pending_orders=[order for order in self.orders if not order.fulfilled and not order.missed],
+            disruption_status=copy.deepcopy(self.disruptions),
             cost_so_far=self.total_cost,
             time_step=self.time_step,
+            orders_fulfilled=self.orders_fulfilled,
+            orders_missed=self.orders_missed,
+            total_orders=self.total_orders,
             supplier_info=copy.deepcopy(self.suppliers),
             route_info=copy.deepcopy(self.routes),
         )
 
     def get_observation(self) -> Observation:
-        """Public accessor for current observation."""
         return self._build_observation()
 
-    # ------------------------------------------------------------------
-    # Action handlers
-    # ------------------------------------------------------------------
-
     def _handle_reroute(self, action: Action) -> float:
-        """Reroute: activate a blocked route or switch to alternate route."""
-        rid = action.route_id
-        if not rid or rid not in self.routes:
-            return -0.3  # invalid action penalty
+        route_id = action.route_id
+        if not route_id or route_id not in self.routes:
+            return -0.3
 
-        # Check if there's actually a disruption on this route
         resolved = False
-        remaining = []
-        for d in self.disruptions:
-            if d.disruption_type == "route_block" and d.target_id == rid:
+        remaining: list[DisruptionEvent] = []
+        for disruption in self.disruptions:
+            if disruption.disruption_type == "route_block" and disruption.target_id == route_id:
                 resolved = True
             else:
-                remaining.append(d)
+                remaining.append(disruption)
 
         if resolved:
             self.disruptions = remaining
-            self.routes[rid]["active"] = True
-            cost = self.routes[rid].get("cost", 20)
-            self.total_cost += cost
-            return 0.5  # good action: fixed a real problem
-        else:
-            self.total_cost += 10  # wasted resources
-            return -0.2  # unnecessary action
+            self.routes[route_id]["active"] = True
+            self.total_cost += self.routes[route_id].get("cost", 20)
+            return 0.5
+
+        self.total_cost += 10
+        return -0.2
 
     def _handle_expedite(self, action: Action) -> float:
-        """Expedite: reactivate a delayed supplier at extra cost."""
-        sid = action.supplier_id
-        if not sid or sid not in self.suppliers:
-            return -0.3  # invalid action
+        supplier_id = action.supplier_id
+        if not supplier_id or supplier_id not in self.suppliers:
+            return -0.3
 
         resolved = False
-        remaining = []
-        for d in self.disruptions:
-            if d.disruption_type == "supplier_delay" and d.target_id == sid:
+        remaining: list[DisruptionEvent] = []
+        for disruption in self.disruptions:
+            if disruption.disruption_type == "supplier_delay" and disruption.target_id == supplier_id:
                 resolved = True
             else:
-                remaining.append(d)
+                remaining.append(disruption)
 
         if resolved:
             self.disruptions = remaining
-            self.suppliers[sid]["active"] = True
-            cost = 30 * self.suppliers[sid].get("capacity", 1) / 100
-            self.total_cost += cost
+            self.suppliers[supplier_id]["active"] = True
+            self.total_cost += 30 * self.suppliers[supplier_id].get("capacity", 1) / 100
             return 0.5
-        else:
-            self.total_cost += 15
-            return -0.2
+
+        self.total_cost += 15
+        return -0.2
 
     def _handle_reallocate(self, action: Action) -> float:
-        """Reallocate: move inventory from one warehouse to another."""
-        wid = action.warehouse_id
-        qty = action.quantity or 0
-        if not wid or wid not in self.warehouses or qty <= 0:
+        warehouse_id = action.warehouse_id
+        quantity = action.quantity or 0
+        if not warehouse_id or warehouse_id not in self.warehouses or quantity <= 0:
             return -0.3
 
-        # Find a source warehouse with surplus (pick highest inventory)
         source = None
-        best_inv = -1
-        for w, inv in self.warehouses.items():
-            if w != wid and inv >= qty and inv > best_inv:
-                source = w
-                best_inv = inv
+        best_inventory = -1
+        for warehouse_name, inventory in self.warehouses.items():
+            if warehouse_name != warehouse_id and inventory >= quantity and inventory > best_inventory:
+                source = warehouse_name
+                best_inventory = inventory
 
         if source is None:
-            return -0.2  # no source available
+            return -0.2
 
-        self.warehouses[source] -= qty
-        self.warehouses[wid] += qty
-        transport_cost = qty * 0.5
-        self.total_cost += transport_cost
-        return 0.3  # partial reward for proactive rebalancing
+        self.warehouses[source] -= quantity
+        self.warehouses[warehouse_id] += quantity
+        self.total_cost += quantity * 0.5
+        return 0.3
 
     def _handle_wait(self) -> float:
-        """Wait: do nothing. Penalise repeated waits."""
         if self._repeated_wait_count >= 2:
-            return -0.5  # escalating penalty for repeated useless waits
+            return -0.5
         if self._repeated_wait_count == 1:
             return -0.3
-        return -0.1  # mild penalty: time is wasting
-
-    # ------------------------------------------------------------------
-    # Helpers
-    # ------------------------------------------------------------------
+        return -0.1
 
     def _route_disrupted(self, route_id: str) -> bool:
-        for d in self.disruptions:
-            if d.disruption_type == "route_block" and d.target_id == route_id:
-                return True
-        return False
+        return any(
+            disruption.disruption_type == "route_block" and disruption.target_id == route_id
+            for disruption in self.disruptions
+        )
 
     def _supplier_disrupted(self, supplier_id: str) -> bool:
-        for d in self.disruptions:
-            if d.disruption_type == "supplier_delay" and d.target_id == supplier_id:
-                return True
-        return False
+        return any(
+            disruption.disruption_type == "supplier_delay" and disruption.target_id == supplier_id
+            for disruption in self.disruptions
+        )
 
     @property
-    def all_orders_done(self) -> bool:
-        """True when no pending unfulfilled orders remain."""
-        return len(self.orders) == 0
+    def all_orders_fulfilled(self) -> bool:
+        """True when every order has been fulfilled successfully."""
+        return self.orders_fulfilled == self.total_orders and self.total_orders > 0
 
-    def get_metrics(self) -> dict:
-        """Return full metrics dict for grading."""
+    def get_metrics(self) -> dict[str, float]:
         return {
             "orders_fulfilled": self.orders_fulfilled,
             "orders_missed": self.orders_missed,
             "total_orders": self.total_orders,
             "fulfillment_rate": (
-                self.orders_fulfilled / self.total_orders
-                if self.total_orders > 0
-                else 1.0
+                self.orders_fulfilled / self.total_orders if self.total_orders > 0 else 1.0
             ),
             "total_cost": self.total_cost,
             "time_step": self.time_step,

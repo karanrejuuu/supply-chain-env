@@ -1,24 +1,23 @@
 name: supply-chain-disruption-agent
 description: >
-  An OpenEnv environment simulating real-world supply chain disruptions.
-  Global supply chains face cascading failures — supplier delays, transport
-  blockages, and inventory imbalances — that cost billions annually. This
-  environment challenges AI agents to diagnose disruptions and take corrective
-  actions (reroute, expedite, reallocate, or wait) across a multi-warehouse,
-  multi-supplier network to satisfy customer demand efficiently.
+  Deterministic supply chain disruption simulator with a heuristic baseline,
+  optional LLM policy, and a FastAPI server wrapper for demos and integrations.
+version: "2.1.0"
+entrypoint: envs.supply_chain_env.server.environment:SupplyChainEnvironment
 
-version: "2.0.0"
-entrypoint: env.environment:SupplyChainEnv
+metadata:
+  api_app: envs.supply_chain_env.server.app:app
+  default_task: hard
 
 tasks:
   - name: easy
-    description: "Single supplier delay — one disruption, fulfil all orders with minimal delay"
+    description: Single supplier delay with two urgent warehouse-A orders.
     max_steps: 10
   - name: medium
-    description: "Multi-warehouse imbalance — uneven inventory, transport decisions required"
+    description: Multi-warehouse inventory imbalance requiring reallocation.
     max_steps: 15
   - name: hard
-    description: "Cascading disruptions — supplier failure + route delays, dynamic adaptation"
+    description: Cascading disruptions requiring expedite, reroute, and recovery.
     max_steps: 20
 
 action_schema:
@@ -27,22 +26,17 @@ action_schema:
     action_type:
       type: string
       enum: [reroute, expedite, reallocate, wait]
-      description: "Primary action to take"
     route_id:
       type: string
-      description: "Target route ID (for reroute actions)"
       nullable: true
     supplier_id:
       type: string
-      description: "Target supplier ID (for expedite actions)"
       nullable: true
     warehouse_id:
       type: string
-      description: "Target warehouse ID (for reallocate actions)"
       nullable: true
     quantity:
       type: integer
-      description: "Units to move/order (for reallocate actions)"
       nullable: true
   required: [action_type]
 
@@ -51,29 +45,37 @@ observation_schema:
   properties:
     inventory_levels:
       type: object
-      description: "Inventory count per warehouse"
     pending_orders:
       type: array
-      description: "List of pending order objects with order_id, destination, quantity, deadline"
     disruption_status:
       type: array
-      description: "Active disruption events with type, target, severity, remaining_steps"
     cost_so_far:
       type: number
-      description: "Cumulative cost of all actions taken"
     time_step:
       type: integer
-      description: "Current simulation time step"
+    task_name:
+      type: string
+    max_steps:
+      type: integer
+    orders_fulfilled:
+      type: integer
+    orders_missed:
+      type: integer
+    total_orders:
+      type: integer
     supplier_info:
       type: object
-      description: "Supplier id -> {capacity, reliability, active}"
     route_info:
       type: object
-      description: "Route id -> {from, to, cost, delay_prob, active}"
+    done:
+      type: boolean
+    reward:
+      type: number
 
 tags:
   - openenv
-  - supply-chain
+  - real-world
   - logistics
-  - reinforcement-learning
-  - sequential-decision-making
+  - simulation
+  - hackathon
+  - fastapi

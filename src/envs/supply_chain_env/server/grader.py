@@ -65,4 +65,12 @@ def grade(metrics: dict) -> float:
         + 0.2 * max(speed, 0.0)
     )
 
+    # Perfect service levels deserve a small resilience bonus.
+    if (
+        orders_fulfilled == total_orders
+        and total_orders > 0
+        and metrics.get("orders_missed", 0) == 0
+    ):
+        score += 0.025
+
     return round(max(0.0, min(1.0, score)), 4)
